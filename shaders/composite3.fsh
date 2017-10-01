@@ -1,9 +1,10 @@
 #version 120
 #include "compat.glsl"
-#extension GL_ARB_shader_texture_lod : require
 #pragma optimize (on)
 
 varying vec2 texcoord;
+
+//#define SPACE
 
 #include "GlslConfig"
 
@@ -24,12 +25,16 @@ LightSourcePBR sun;
 
 Mask mask;
 
+#define WATER_PARALLAX
+
 #include "Water.glsl.frag"
 
 #define WISDOM_AMBIENT_OCCLUSION
 #define WATER_REFRACTION
 #define IBL
 #define IBL_SSR
+
+//#define GLASS_REFRACTION
 
 void main() {
 	// rebuild hybrid flag
@@ -45,23 +50,25 @@ void main() {
 	if (mask.is_valid || isEyeInWater) {
 		material_sample(land, texcoord);
 		
+		float total_internal_reflection = 0.0;
+		
 		// Transperant
-		if (mask.is_trans) {
+		if (mask.is_trans || isEyeInWater || mask.is_particle) {
 			material_sample_water(glossy, texcoord);
 
 			float water_sky_light = 0.0;
 		
 			if (mask.is_water) {
-				water_sky_light = glossy.albedo.b * 2.0;
-				mclight.y = water_sky_light * 8.5;
+				water_sky_light = pow(glossy.albedo.b, 1.0f / 2.2f) * 9.8097;
+				if (!isEyeInWater) mclight.y = water_sky_light;
 				glossy.albedo = vec3(1.0);
 				glossy.roughness = 0.05;
-				glossy.metalic = 0.03;
+				glossy.metalic = 0.01;
 				
 				vec3 water_plain_normal = mat3(gbufferModelViewInverse) * glossy.N;
+				if (isEyeInWater) water_plain_normal = -water_plain_normal;
 				
 				float lod = pow(max(water_plain_normal.y, 0.0), 4.0);
-				lod = smoothstep(0.0, 1.0, distance(glossy.vpos, land.vpos));
 				
 				#ifdef WATER_PARALLAX
 				if (lod > 0.0) WaterParallax(glossy.wpos, lod);
@@ -73,106 +80,167 @@ void main() {
 				glossy.wpos -= vec3(wp.x, 0.0, wp.y);
 				#endif
 				
-				vec3 water_normal = (lod > 0.99) ? get_water_normal(glossy.wpos + cameraPosition, wave * water_plain_normal, lod) : water_plain_normal;
+				vec3 water_normal = (lod > 0.99) ? get_water_normal(glossy.wpos + cameraPosition, wave, lod, water_plain_normal) : water_plain_normal;
+				if (isEyeInWater) water_normal = -water_normal;
 				
 				glossy.N = mat3(gbufferModelView) * water_normal;
 				glossy.vpos = (!mask.is_water && isEyeInWater) ? glossy.vpos : (gbufferModelView * vec4(glossy.wpos, 1.0)).xyz;
+				glossy.nvpos = normalize(glossy.vpos);
 				
 				// Refraction
 				#ifdef WATER_REFRACTION
-				vec3 refract_vpos = refract(land.vpos - glossy.vpos, glossy.N, 1.0 / 1.3);
-				land.vpos = refract_vpos + glossy.vpos;
-				land.nvpos = normalize(land.vpos);
-								
-				vec2 uv = screen_project(land.vpos);
-				uv = mix(uv, texcoord, pow(abs(uv - vec2(0.5)) * 2.0, vec2(2.0)));
-				color = texture2DLod(composite, uv, 1.0).rgb * 0.5;
-				color += texture2DLod(composite, uv, 2.0).rgb * 0.3;
-				color += texture2DLod(composite, uv, 3.0).rgb * 0.2;
+				float l = min(32.0, length(land.vpos - glossy.vpos));
+				vec3 refract_vpos = refract(glossy.nvpos, glossy.N, isEyeInWater ? 1.33 / 1.00029 : 1.00029 / 1.33);
+				if (refract_vpos != vec3(0.0)) {
+					if (!isEyeInWater) l *= (0.2 + max(0.0, dot(glossy.nvpos, glossy.N)) * 0.8);
+					vec2 uv = screen_project(refract_vpos * l + glossy.vpos);
+					uv = mix(uv, texcoord, pow(abs(uv - vec2(0.5)) * 2.0, vec2(2.0)));
+				
+					land.vpos = fetch_vpos(uv, depthtex1).xyz;
+					land.cdepth = length(land.vpos);
+					land.nvpos = land.vpos / land.cdepth;
+					land.cdepthN = land.cdepth / far;
+				
+					color = texture2DLod(composite, uv, 1.0).rgb * 0.5;
+					color += texture2DLod(composite, uv, 2.0).rgb * 0.3;
+					color += texture2DLod(composite, uv, 3.0).rgb * 0.2;
+				} else {
+					color = vec3(0.0);
+					total_internal_reflection = max(0.0, -dot(glossy.nvpos, glossy.N));
+				}
 				#endif
 				
-				glossy.nvpos = normalize(glossy.vpos);
 				glossy.cdepth = length(glossy.vpos);
 				glossy.cdepthN = glossy.cdepth / far;
+			} else if (!isEyeInWater && flag < 0.98 && !mask.is_particle) {
+				glossy.roughness = 0.3;
+				glossy.metalic = 0.8;
+				
+				vec2 uv = texcoord;
+				#ifdef GLASS_REFRACTION
+				if (land.cdepthN < 1.0) {
+					vec3 refract_vpos = refract(glossy.nvpos, glossy.N, 1.00029 / 1.52);
+					uv = screen_project(refract_vpos + land.vpos - land.nvpos);
+					//uv = mix(uv, texcoord, pow(abs(uv - vec2(0.5)) * 2.0, vec2(2.0)));
+				
+					land.vpos = fetch_vpos(uv, depthtex1).xyz;
+					land.cdepth = length(land.vpos);
+					land.nvpos = land.vpos / land.cdepth;
+					land.cdepthN = land.cdepth / far;
+				}
+				#endif
+				
+				color = texture2DLod(composite, uv, 0.0).rgb * 0.2;
+				color += texture2DLod(composite, uv, 1.0).rgb * 0.3;
+				color += texture2DLod(composite, uv, 2.0).rgb * 0.5;
+				
+				float n = noise((glossy.wpos.xz + cameraPosition.xz) * 0.06) * 0.05;
+				glossy.N.x += n;
+				glossy.N.y -= n;
+				glossy.N.z += n;
+				glossy.N = normalize(glossy.N);
+				
+				color = color * glossy.albedo * 2.0;
 			} else {
-				glossy.albedo = mix(glossy.albedo, vec3(1.0), glossy.opaque * 0.5);
-				
-				glossy.roughness = 0.04;
-				glossy.metalic = 0.25;
-				
-				color = texture2DLod(composite, texcoord, 1.0).rgb * 0.5;
-				color += texture2DLod(composite, texcoord, 2.0).rgb * 0.3;
-				color += texture2DLod(composite, texcoord, 3.0).rgb * 0.2;
-				
-				color = color * glossy.albedo;
+				color = mix(color, glossy.albedo, glossy.opaque * (float(mask.is_sky) * 0.7 + 0.3));
 			}
+		
+			float shadow = 1.0;
+			if (!isEyeInWater && flag < 0.98) shadow = light_fetch_shadow_fast(shadowtex1, light_shadow_autobias(land.cdepthN), wpos2shadowpos(glossy.wpos));
 		
 			// Render
 			if (mask.is_water || isEyeInWater) {
-				float dist_diff = isEyeInWater ? length(land.vpos) : distance(land.vpos, glossy.vpos);
-				float dist_diff_N = min(1.0, dist_diff * 0.125);
+				float dist_diff = isEyeInWater ? length(glossy.vpos) : distance(land.vpos, glossy.vpos);
+				dist_diff += total_internal_reflection * 4.0;
+				float dist_diff_N = min(1.0, dist_diff * 0.0625);
 			
-				// Absorbtion
-				float absorbtion = 2.0 / (dist_diff_N + 1.0) - 1.0;
-				vec3 watercolor = color * pow(vec3(absorbtion), vec3(1.0, 0.4, 0.5));
-				vec3 waterfog = luma(ambient) * water_sky_light * vec3(0.2,0.8,1.0) * 3.5;
-				color = mix(waterfog, watercolor, smoothstep(0.0, 1.0, absorbtion));
+				// Absorption
+				float absorption = 2.0 / (dist_diff_N + 1.0) - 1.0;
+				vec3 watercolor = color * pow(vec3(absorption), vec3(2.0, 0.8, 1.0));
+				float light_att = (isEyeInWater) ? (eyeBrightness.y * 0.0215 * (total_internal_reflection + 1.0) + 0.01) : max(water_sky_light, 1.0 - shadow);
+				vec3 waterfog = max(luma(ambient) * 0.18, 0.0) * light_att * vec3(0.1,0.7,0.8);
+				color = mix(waterfog, watercolor, pow(absorption, 2.0));
 			}
 			
-			sun.light.color = suncolor;
-			float shadow = light_fetch_shadow_fast(shadowtex1, light_shadow_autobias(land.cdepthN), wpos2shadowpos(glossy.wpos));
-			shadow = max(extShadow, shadow);
-			sun.light.attenuation = 1.0 - shadow;
-			sun.L = lightPosition;
+			#ifndef SPACE
+			if (!isEyeInWater && (flag < 0.98 || mask.is_sky)) {
+				sun.light.color = suncolor;
+				shadow = max(extShadow, shadow);
+				sun.light.attenuation = 1.0 - shadow;
+				sun.L = lightPosition;
 			
-			color += light_calc_PBR_brdf(sun, glossy);
+				color += light_calc_PBR_brdf(sun, glossy);
+				
+				land = glossy;
+			}
+			#endif
 			
-			if (!isEyeInWater) land = glossy;
+			if (isEyeInWater && total_internal_reflection > 0.0) land = glossy;
 		} else {
 			// Force ground wetness
-			float wetness2 = wetness * pow(mclight.y, 5.0) * float(!mask.is_plant);
-			if (wetness2 > 0.1 && !(mask.is_water || mask.is_hand || mask.is_entity)) {
-				float wet = noise((land.wpos + cameraPosition).xz * 0.15);
-				wet += noise((land.wpos + cameraPosition).xz * 0.3) * 0.5;
-				wet = clamp(smoothstep(0.15, 0.3, wetness2) * wet, 0.0, 1.0);
+			float wetness2 = wetness * smoothstep(0.92, 1.0, mclight.y) * float(!mask.is_plant);
+			if (wetness2 > 0.0 && !(mask.is_water || mask.is_hand || mask.is_entity)) {
+				float wet = noise((land.wpos + cameraPosition).xz * 0.5 - frameTimeCounter * 0.02);
+				wet += noise((land.wpos + cameraPosition).xz * 0.6 - frameTimeCounter * 0.01) * 0.5;
+				wet = clamp(wetness2 * 3.0, 0.0, 1.0) * clamp(wet * 2.0 + wetness2, 0.0, 1.0);
 				
-				land.roughness = mix(land.roughness, 0.05, wet);
-				land.metalic = mix(land.metalic, 0.15, wet);
-				if (mclight.w > 0.5) {
-					vec3 flat_normal = normalDecode(mclight.zw);
-					land.N = mix(land.N, flat_normal, wet);
+				if (wet > 0.0) {
+					land.roughness = mix(land.roughness, 0.05, wet);
+					land.metalic = mix(land.metalic, 0.03, wet);
+					if (mclight.w > 0.5) {
+						vec3 flat_normal = normalDecode(mclight.zw);
+						land.N = mix(land.N, flat_normal, wet);
+					}
+				
+					color *= 1.0 - wet * 0.6;
+				
+					land.N.x += noise((land.wpos.xz + cameraPosition.xz) * 5.0 - vec2(frameTimeCounter * 2.0, 0.0)) * 0.05 * wet;
+					land.N.y -= noise((land.wpos.xz + cameraPosition.xz) * 6.0 - vec2(frameTimeCounter * 2.0, 0.0)) * 0.05 * wet;
+					land.N = normalize(land.N);
+
+					color = mix(color, color * 0.3, wet * (1.0 - abs(dot(land.nvpos, land.N))));
 				}
 			}
 		}
 		
 		#ifdef IBL
 		// IBL
-		if (land.roughness < 0.7) {
+		if (land.roughness < 0.6) {
 			vec3 viewRef = reflect(land.nvpos, land.N);
 			#ifdef IBL_SSR
 			vec4 glossy_reflect = ray_trace_ssr(viewRef, land.vpos, land.roughness);
 			vec3 skyReflect = vec3(0.0);
-			if (glossy_reflect.a < 0.95) skyReflect = calc_sky((mat3(gbufferModelViewInverse) * viewRef) * 512.0 + vec3(0.0, cameraPosition.y, 0.0), viewRef);
-			vec3 ibl = mix(skyReflect * mclight.y, glossy_reflect.rgb, glossy_reflect.a);
+			if (!isEyeInWater && glossy_reflect.a < 0.95) skyReflect = calc_sky((mat3(gbufferModelViewInverse) * viewRef) * 512.0 + vec3(0.0, cameraPosition.y + land.wpos.y, 0.0), viewRef, cameraPosition + land.wpos.xyz);
+			vec3 ibl = mix(skyReflect * smoothstep(0.0, 0.5, mclight.y), glossy_reflect.rgb, glossy_reflect.a);
 			#else
-			vec3 ibl = calc_sky((mat3(gbufferModelViewInverse) * viewRef) * 512.0, viewRef);
+			vec3 ibl = isEyeInWater ? vec3(0.0) : calc_sky((mat3(gbufferModelViewInverse) * viewRef) * 512.0, viewRef, cameraPosition + land.wpos.xyz);
 			#endif
-			color += light_calc_PBR_IBL(viewRef, land, ibl);
+			vec3 calc_IBL = light_calc_PBR_IBL(viewRef, land, ibl);
+			if (isEyeInWater) calc_IBL *= total_internal_reflection;
+			color += calc_IBL;
 		}
 		#endif
 		
 		// Atmosphere
+		#ifndef SPACE
 		vec3 atmosphere = calc_atmosphere(land.wpos, land.nvpos);
 	
 		float lit_strength = 1.0;
 		#ifdef CrespecularRays
 		float vl = 0.0;
-		lit_strength = VL(land.wpos, land.cdepth, vl);
-		color += 0.006 * pow(vl, 0.3) * suncolor;
+		if (!isEyeInWater) {
+			lit_strength = VL(land.wpos, vl);
+			color += 0.008 * pow(vl, 0.35) * suncolor;
+		}
 		#endif
 
-		calc_fog_height (land, 0.0, 512.0 * (1.0 - 0.5 * rainStrength), color, atmosphere * (0.3 + lit_strength * (0.7 + rainStrength)));
+		if (!isEyeInWater) calc_fog_height (land, 0.0, 512.0 * (1.0 - cloud_coverage), color, atmosphere * (0.7 * lit_strength + 0.3));
+		#endif
 	}
+	
+	#ifdef XLLLLL
+	color=vec3(1.0,0.0,0.0);
+	#endif
 
 /* DRAWBUFFERS:3 */
 	gl_FragData[0] = vec4(color, 1.0f);

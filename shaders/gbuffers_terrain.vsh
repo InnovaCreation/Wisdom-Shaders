@@ -37,7 +37,7 @@ uniform mat4 gbufferModelViewInverse;
 uniform float rainStrength;
 uniform float frameTimeCounter;
 
-varying vec4 color;
+varying f16vec4 color;
 varying vec4 coords;
 varying vec4 wdata;
 
@@ -50,19 +50,22 @@ varying float dis;
 #define lmcoord coords.ba
 
 #ifdef NORMALS
-varying vec3 tangent;
-varying vec3 binormal;
+varying f16vec3 tangent;
+varying f16vec3 binormal;
 #else
-vec3 tangent;
-vec3 binormal;
+f16vec3 tangent;
+f16vec3 binormal;
+
+f16vec2 normalEncode(f16vec3 n) {return sqrt(-n.z*0.125f+0.125f) * normalize(n.xy) + 0.5f;}
+varying vec2 n2;
 #endif
 
-//#define ParallaxOcclusion
+#define ParallaxOcclusion
 #ifdef ParallaxOcclusion
-varying vec3 tangentpos;
+varying f16vec3 tangentpos;
 #endif
 
-//#define PARALLAX_SELF_SHADOW
+#define PARALLAX_SELF_SHADOW
 #ifdef PARALLAX_SELF_SHADOW
 varying vec3 sun;
 
@@ -76,7 +79,7 @@ uniform vec3 shadowLightPosition;
 void main() {
 	color = gl_Color;
 	
-	normal = normalize(gl_NormalMatrix * gl_Normal);
+	normal = gl_NormalMatrix * gl_Normal;
 
 	tangent = normalize(gl_NormalMatrix * at_tangent.xyz);
     binormal = cross(tangent, normal);
@@ -92,15 +95,14 @@ void main() {
 
 	if (blockId == 31.0 || blockId == 37.0 || blockId == 38.0 || blockId == 59.0 || blockId == 141.0 || blockId == 142.0) {
 		#ifdef WAVING_FOILAGE
-		float rand_ang = hash(position.xz);
-		position.x += rand_ang * 0.2;
-		position.z -= rand_ang * 0.2;
 		if (gl_MultiTexCoord0.t < mc_midTexCoord.t) {
+			float rand_ang = hash(position.xz);
 			float reset = cos(rand_ang * 10.0 + time * 0.1);
 			reset = max( reset * reset, max(rainStrength, 0.1));
 			position.x += (sin(rand_ang * 10.0 + time + position.y) * 0.2) * (reset * maxStrength);
 		}
 		#endif
+		color.a *= 0.4;
 		flag = 0.50;
 	} else if(mc_Entity.x == 18.0 || mc_Entity.x == 106.0 || mc_Entity.x == 161.0 || mc_Entity.x == 175.0) {
 		#ifdef WAVING_FOILAGE
@@ -119,14 +121,15 @@ void main() {
 	lmcoord = (gl_TextureMatrix[1] *  gl_MultiTexCoord1).xy;
 
 	#ifdef ParallaxOcclusion
-	mat3 TBN = mat3(
-		tangent.x, binormal.x, normal.x,
-		tangent.y, binormal.y, normal.y,
-		tangent.z, binormal.z, normal.z);
-	tangentpos  = normalize(TBN * wpos);
+	f16mat3 TBN = f16mat3(tangent, binormal, normal);
+	tangentpos = normalize(wpos * TBN);
 	#ifdef PARALLAX_SELF_SHADOW
 	sun = TBN * normalize(shadowLightPosition);
 	#endif
+	#endif
+	
+	#ifndef NORMALS
+	n2 = normalEncode(normal);
 	#endif
 	
 	dis = length(wpos);

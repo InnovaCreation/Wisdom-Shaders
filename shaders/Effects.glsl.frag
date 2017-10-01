@@ -31,6 +31,7 @@ void bit8(out vec3 color) {
 #define FILMIC_CINEMATIC_ANAMORPHIC
 #ifdef FILMIC_CINEMATIC
 void filmic_cinematic(inout vec3 color) {
+	color = clamp(color, vec3(0.0), vec3(2.0));
 	float w = luma(color);
 	
 	color = mix(vec3(w), max(color - vec3(w * 0.1), vec3(0.0)), 0.4 + w * 0.8);
@@ -104,6 +105,10 @@ vec3 applyEffect(float total, float size,
 	return max(color / total, vec3(0.0));
 }
 
+vec3 saturation(vec3 rgbColor, float s) {
+	return mix(vec3(luma(rgbColor)), rgbColor, s);
+}
+
 //#define DOF
 #if (defined(BLOOM) || defined(DOF))
 
@@ -172,20 +177,55 @@ vec4 texture_Bicubic(sampler2D tex, vec2 uv)
                         g1x * texture2D(tex, p3));
 }
 
-vec3 bloom() {
+#define DIRTY_LENS
+#define DIRTY_LENS_TEXTURE
+
+vec3 bloom(inout vec3 c) {
 	vec2 tex = texcoord * 0.25;
-	vec3 color = texture_Bicubic(gcolor, tex).rgb;
-	tex = texcoord * 0.125 + vec2(0.0f, 0.25f) + vec2(0.000f, 0.025f);
-	color += texture_Bicubic(gcolor, tex).rgb;
-	tex = texcoord * 0.0625 + vec2(0.125f, 0.25f) + vec2(0.025f, 0.025f);
-	color += texture_Bicubic(gcolor, tex).rgb;
-	tex = texcoord * 0.03125 + vec2(0.1875f, 0.25f) + vec2(0.050f, 0.025f);
-	color += texture_Bicubic(gcolor, tex).rgb;
-	tex = texcoord * 0.015625 + vec2(0.21875f, 0.25f) + vec2(0.075f, 0.025f);
-	color += texture_Bicubic(gcolor, tex).rgb;
+	vec2 pix_offset = 1.0 / vec2(viewWidth, viewHeight);
+	vec3 color = texture_Bicubic(gcolor, tex - pix_offset).rgb;
+	tex = texcoord * 0.125 + vec2(0.0f, 0.35f) + vec2(0.000f, 0.035f);
+	color += texture_Bicubic(gcolor, tex - pix_offset).rgb;
+	tex = texcoord * 0.0625 + vec2(0.125f, 0.35f) + vec2(0.030f, 0.035f);
+	color += texture_Bicubic(gcolor, tex - pix_offset).rgb;
+	tex = texcoord * 0.03125 + vec2(0.1875f, 0.35f) + vec2(0.060f, 0.035f);
+	color += texture_Bicubic(gcolor, tex - pix_offset).rgb;
+	tex = texcoord * 0.015625 + vec2(0.21875f, 0.35f) + vec2(0.090f, 0.035f);
+	color += texture_Bicubic(gcolor, tex - pix_offset).rgb;
 	
 	color *= 0.2;
-	return color * smoothstep(0.03, 1.0, luma(color));
+	float l = luma(color);
+	
+	// Dirty lens
+	#ifdef DIRTY_LENS
+	vec2 ext_tex = (texcoord - 0.5) * 0.5 + 0.5;
+	tex = ext_tex * 0.03125 + vec2(0.1875f, 0.35f) + vec2(0.060f, 0.035f);
+	vec3 color_huge = texture_Bicubic(gcolor, tex - pix_offset).rgb;
+	tex = ext_tex * 0.015625 + vec2(0.21875f, 0.35f) + vec2(0.090f, 0.035f);
+	color_huge += texture_Bicubic(gcolor, tex - pix_offset).rgb;
+	
+	float lh = luma(color_huge);
+	if (lh > 0.4) {
+		vec2 uv = texcoord;
+		uv.y = uv.y / viewWidth * viewHeight;
+		float col = smoothstep(0.4, 0.6, lh);
+		
+		#ifdef DIRTY_LENS_TEXTURE
+		vec3 lens = texture2D(gaux3, texcoord).rgb;
+		c = mix(c, mix(color, color_huge * lens, 0.7), lens * col);
+		#else
+		float n = abs(simplex2D(uv * 10.0));
+		n += simplex2D(uv * 6.0 + 0.4) * 0.4;
+		n += simplex2D(uv * 3.0 + 0.7);
+		
+		n = clamp(n * 0.3, 0.0, 1.0);
+		
+		c = mix(c, mix(color, color_huge, 0.7), n * col * 0.5);
+		#endif
+	}
+	#endif
+	
+	return color * l;
 }
 
 void dof(inout vec3 color) {

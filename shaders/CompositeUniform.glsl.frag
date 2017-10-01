@@ -12,11 +12,12 @@ uniform float rainStrength;
 uniform float centerDepthSmooth;
 
 uniform ivec2 eyeBrightnessSmooth;
+uniform ivec2 eyeBrightness;
 
 uniform bool isEyeInWater;
 
 uniform sampler2D gcolor;
-uniform sampler2D gdepth;
+uniform sampler2D colortex1;
 uniform sampler2D gnormal;
 uniform sampler2D composite;
 uniform sampler2D gaux1;

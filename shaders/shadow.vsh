@@ -25,7 +25,7 @@
 
 #pragma optimize(on)
 
-#define SHADOW_MAP_BIAS 0.9
+#define SHADOW_MAP_BIAS 0.85
 const float negBias = 1.0f - SHADOW_MAP_BIAS;
 
 attribute vec4 mc_Entity;
@@ -34,41 +34,47 @@ attribute vec4 mc_midTexCoord;
 uniform float rainStrength;
 uniform float frameTimeCounter;
 
-varying vec3 coords;
-varying vec3 color;
+//uniform mat4 gbufferModelViewInverse;
 
-#define texcoord coords.xy
-#define iswater coords.z
+varying vec2 texcoord;
+varying vec3 color;
+varying float LOD;
+
+//uniform mat4 shadowProjection;
 
 #define hash(p) fract(mod(p.x, 1.0) * 73758.23f - p.y)
 
-//#define WAVING_SHADOW
+#define WAVING_SHADOW
 
 void main() {
 	vec4 position = gl_Vertex;
-	float blockId = mc_Entity.x;
 	color = gl_Color.rgb;
 
-	if (blockId == 31.0 || blockId == 37.0 || blockId == 38.0) {
+	float blockId = mc_Entity.x;
+	#ifdef WAVING_SHADOW
+	if (gl_MultiTexCoord0.t < mc_midTexCoord.t && (blockId == 31.0 || blockId == 37.0 || blockId == 38.0)) {
 		float rand_ang = hash(position.xz);
-		position.x += rand_ang * 0.2;
-		position.z -= rand_ang * 0.2;
-		#ifdef WAVING_SHADOW
-		if (gl_MultiTexCoord0.t < mc_midTexCoord.t) {
-			float maxStrength = 1.0 + rainStrength * 0.5;
-			float time = frameTimeCounter * 3.0;
-			float reset = cos(rand_ang * 10.0 + time * 0.1);
-			reset = max( reset * reset, max(rainStrength, 0.1));
-			position.x += (sin(rand_ang * 10.0 + time + position.y) * 0.2) * (reset * maxStrength);
-		}
-		#endif
+		float maxStrength = 1.0 + rainStrength * 0.5;
+		float time = frameTimeCounter * 3.0;
+		float reset = cos(rand_ang * 10.0 + time * 0.1);
+		reset = max( reset * reset, max(rainStrength, 0.1));
+		position.x += (sin(rand_ang * 10.0 + time + position.y) * 0.2) * (reset * maxStrength);
 	}
+	position = gl_ProjectionMatrix * (gl_ModelViewMatrix * position);
+	#else
+	position = ftransform();
+	#endif
+	
+	float l = sqrt(dot(position.xy, position.xy));
 
-	iswater = float(blockId == 8.0 || blockId == 9.0);
+//	vec4 testpos = shadowProjection * (gbufferModelViewInverse * vec4(0.0, 0.0, 1.0, 1.0));
+//	if (dot(normalize(testpos.xy), normalize(position.xy)) < -0.3) position.z -= 1000000.0f;
 
-	gl_Position = gl_ProjectionMatrix * (gl_ModelViewMatrix * position);
+	position.xy /= l * SHADOW_MAP_BIAS + negBias;
+	
+	LOD = l * 2.0;
+	if ((blockId == 31.0 || blockId == 37.0 || blockId == 38.0) && l > 0.5) position.z -= 1000000.0f;
 
-	float distortFactor = negBias + length(gl_Position.xy) * SHADOW_MAP_BIAS;
-	gl_Position.xy /= distortFactor;
+	gl_Position = position;
 	texcoord = gl_MultiTexCoord0.st;
 }

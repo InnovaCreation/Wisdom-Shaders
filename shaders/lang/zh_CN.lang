@@ -4,11 +4,11 @@ profile.MEDIUM=中画质
 profile.HIGH=高画质
 profile.ULTRA=极高画质
 
-screen.ATMOSPHERE=大气
-screen.LIGHTING=光照
-screen.MATERIALS=材质材料
-screen.IMAGE_EFFECTS=画面特效
-screen.TONE=色调与滤镜
+screen.ATMOSPHERE=大气设置
+screen.LIGHTING=光照设置
+screen.MATERIALS=材质材料设置
+screen.IMAGE_EFFECTS=画面特效设置
+screen.TONE=色调与滤镜设置
 
 screen.PARALLAX_SETTINGS=视差材质设置
 screen.WATER_OPTIONS=水设置
@@ -16,12 +16,15 @@ screen.SHADOW_OPTIONS=阴影设置
 
 option.CrespecularRays=体积光
 option.HIGH_QUALITY_Crespecular=高质量体积光
+option.VOLUMETRIC_CLOUDS=体积云
+option.HQ_VOLUMETRICS=高质量体积云
 
 option.WISDOM_AMBIENT_OCCLUSION=Wisdom环境光遮蔽
 option.HQ_AO=高质量环境光遮蔽
 option.IBL=反射着色
 option.IBL_SSR=屏幕空间反射
 option.SSR_STEPS=反射精度
+option.DIRECTIONAL_LIGHTMAP=定向环境光追踪
 
 option.NORMALS=法线贴图
 option.SPECULAR_TO_PBR_CONVERSION=高光材质转换
@@ -45,8 +48,13 @@ option.DOF=景深
 option.MOTION_BLUR=动态模糊
 option.SSEDAA=边缘检测抗锯齿
 option.VIGNETTE=画面暗角
+option.DIRTY_LENS=脏镜头
+option.DIRTY_LENS_TEXTURE=超级脏镜头材质
+option.DIRTY_LENS_TEXTURE.comment=需要新版Optifine的材质载入支持
+option.SCREEN_RAIN_DROPS=镜头雨点
 
 option.EXPOSURE=曝光
+option.AVERAGE_EXPOSURE=动态曝光
 option.BLACK_AND_WHITE=黑白滤镜
 option.PRIME_RENDER=素模渲染滤镜
 option.ambientOcclusionLevel=方块交界暗化

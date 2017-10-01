@@ -2,18 +2,18 @@
 #include "compat.glsl"
 #pragma optimize (on)
 
-varying vec2 texcoord;
+varying vec2 tex;
+vec2 texcoord = tex;
 
 #include "GlslConfig"
 
-//#define MOTION_BLUR
+#define MOTION_BLUR
 #define BLOOM
 
 #include "CompositeUniform.glsl.frag"
 #include "Utilities.glsl.frag"
 #include "Effects.glsl.frag"
 
-//#define SSEDAA
 //#define BLACK_AND_WHITE
 
 #define LF
@@ -48,38 +48,53 @@ const vec4 LF3COLOR = vec4(0.2, 0.6, 0.8, 0.05);
 vec3 lensFlare(vec3 color, vec2 uv) {
 	if(sunVisibility <= 0.0)
 		return color;
-	LENS_FLARE(color, uv, lf1Pos, LF1SIZE, (LF1COLOR * vec4(suncolor, 1.0)));
-	LENS_FLARE(color, uv, lf2Pos, LF2SIZE, (LF2COLOR * vec4(suncolor, 1.0)));
-	LENS_FLARE(color, uv, lf3Pos, LF3SIZE, (LF3COLOR * vec4(suncolor, 1.0)));
+	LENS_FLARE(color, uv, lf1Pos, LF1SIZE, (LF1COLOR * vec4(suncolor, 1.0) * (1.0 - extShadow)));
+	LENS_FLARE(color, uv, lf2Pos, LF2SIZE, (LF2COLOR * vec4(suncolor, 1.0) * (1.0 - extShadow)));
+	LENS_FLARE(color, uv, lf3Pos, LF3SIZE, (LF3COLOR * vec4(suncolor, 1.0) * (1.0 - extShadow)));
 	return color;
 }
 
 #endif
 // ==========================
 
+#define SATURATION 2.0 // [0.6 1.0 1.5 2.0]
+
+#define SCREEN_RAIN_DROPS
+#define DISTORTION_FIX
+
+uniform float nightVision;
+uniform float blindness;
+
+//uniform float aspectRatio;
+
+#ifdef DISTORTION_FIX
+varying vec3 vUV;
+varying vec2 vUVDot;
+#endif
 
 void main() {
+	#ifdef DISTORTION_FIX
+	vec3 distort = dot(vUVDot, vUVDot) * vec3(-0.5, -0.5, -1.0) + vUV;
+	texcoord = distort.xy / distort.z;
+	#endif
+	#ifdef SCREEN_RAIN_DROPS
+	float real_strength = rainStrength * smoothstep(0.8, 1.0, float(eyeBrightness.y) / 240.0);
+	if (rainStrength > 0.0) {
+		vec2 adj_tex = texcoord * vec2(aspectRatio, 1.0);
+		float n = noise((adj_tex + vec2(0.1, 1.0) * frameTimeCounter) * 2.0);
+		n -= 0.6 * abs(noise((adj_tex * 2.0 + vec2(0.1, 1.0) * frameTimeCounter) * 3.0));
+		n *= (n * n) * (n * n);
+		n *= real_strength * 0.007;
+		vec2 uv = texcoord + vec2(n, -n);
+		texcoord = mix(uv, texcoord, pow(abs(uv - vec2(0.5)) * 2.0, vec2(2.0)));
+	}
+	#endif
+
 	#ifdef EIGHT_BIT
 	vec3 color;
 	bit8(color);
 	#else
-	#ifdef SSEDAA
 	vec3 color = texture2D(composite, texcoord).rgb;
-	float size = 1.0 / length(fetch_vpos(texcoord, depthtex0).xyz);
-	vec3 edge = applyEffect(1.0, size,
-		-1.0, -1.0, -1.0,
-		-1.0,  8.0, -1.0,
-		-1.0, -1.0, -1.0,
-		composite, texcoord);
-	vec3 blur = applyEffect(6.8, size,
-		0.3, 1.0, 0.3,
-		1.0, 1.6, 1.0,
-		0.3, 1.0, 0.3,
-		composite, texcoord);
-	color = mix(color, blur, edge);
-	#else
-	vec3 color = texture2D(composite, texcoord).rgb;
-	#endif
 	#endif
 
 	#ifdef MOTION_BLUR
@@ -93,9 +108,10 @@ void main() {
 	float exposure = get_exposure();
 
 	#ifdef BLOOM
-	color += max(vec3(0.0), bloom() * exposure);
+	vec3 b = bloom(color);
+	color += max(vec3(0.0), b) * exposure * (1.0 + float(isEyeInWater));
 	#endif
-	
+
 	#ifdef LF
 	color = lensFlare(color, texcoord);
 	#endif
@@ -104,16 +120,22 @@ void main() {
 	#ifdef BLACK_AND_WHITE
 	color = vec3(luma(color));
 	#endif
-	
+
 	#ifdef NOISE_AND_GRAIN
 	noise_and_grain(color);
 	#endif
-	
+
 	#ifdef FILMIC_CINEMATIC
 	filmic_cinematic(color);
 	#endif
-	
+
 	tonemap(color, exposure);
-	
+	// Apply night vision gamma
+	color = pow(color, vec3(1.0 - nightVision * 0.6));
+	// Apply blindness
+	color = pow(color, vec3(1.0 + blindness));
+
+	saturation(color, SATURATION);
+
 	gl_FragColor = vec4(color, 1.0f);
 }
